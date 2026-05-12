@@ -29,9 +29,9 @@ contract MyEducationalToken {
 
     // 4. Constructor (Initialization)
     // Runs only once when the contract is deployed
-    constructor(uint256 _initialSupply) {
+    constructor() {
         // Calculate the actual supply based on decimals (e.g., 1000 * 10^18)
-        totalSupply = _initialSupply * (10 ** uint256(decimals));
+        totalSupply = 100000 * (10 ** uint256(decimals));
         
         // Give all the initially created tokens to the person who deployed the contract
         balanceOf[msg.sender] = totalSupply;
