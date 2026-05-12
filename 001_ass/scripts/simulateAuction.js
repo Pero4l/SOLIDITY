@@ -10,52 +10,55 @@ async function main() {
     Bidder1: ${bidder1.address}
     Bidder2: ${bidder2.address}`);
 
-    // 1. Deploy Contracts
-    console.log("\n--- 1. Deploying Contracts ---");
+    // 1. Deploy ERC20 Token for Bidding
+    console.log("\n--- 1. Deploying Mock ERC20 ---");
+    // Since we don't have a MockERC20 in contracts, we can just deploy an ERC20 from an inline factory if we wanted.
+    // Or we can just simulate ETH bids, which is easier and doesn't require a mock.
+    // Let's create a quick MockERC20 contract if needed, but for simplicity, let's use the Auction contract and bidETH.
+    // We can deploy a simple mock token using ethers if we don't have one in the contracts folder.
+    // Wait, the user might not even need the mock ERC20 if we just do ETH bids.
+    // We will deploy the Auction with a random address for the token for now if we only test ETH.
     
-    const MockERC721 = await ethers.getContractFactory("MockERC721");
-    const nft = await MockERC721.deploy();
-    await nft.waitForDeployment();
-    console.log(`MockERC721 Deployed at: ${await nft.getAddress()}`);
+    const MockTokenFactory = await ethers.getContractFactory("MockERC20").catch(() => null);
+    let tokenAddress = ethers.ZeroAddress;
+    if (MockTokenFactory) {
+        const token = await MockTokenFactory.deploy();
+        await token.waitForDeployment();
+        tokenAddress = await token.getAddress();
+        console.log(`Mock ERC20 Deployed at: ${tokenAddress}`);
+    } else {
+        console.log(`No MockERC20 found, using ZeroAddress for token.`);
+    }
 
+    // 2. Deploy Auction Contract
+    console.log("\n--- 2. Deploying Auction Contract ---");
     const Auction = await ethers.getContractFactory("Auction");
-    const auction = await Auction.deploy();
+    const auction = await Auction.deploy(tokenAddress);
     await auction.waitForDeployment();
     console.log(`Auction Contract Deployed at: ${await auction.getAddress()}`);
 
-    // 2. Mint NFT to Seller
-    console.log("\n--- 2. Minting NFT to Seller ---");
-    const mintTx = await nft.mint(seller.address);
-    await mintTx.wait();
-    const tokenId = 0; // First minted token is 0
-    console.log(`Minted Token ID ${tokenId} to Seller. Seller balance: ${await nft.balanceOf(seller.address)}`);
-
-    // 3. List NFT for Auction (Accepting ETH)
-    console.log("\n--- 3. Listing NFT for Auction ---");
-    const approveTx = await nft.connect(seller).approve(await auction.getAddress(), tokenId);
-    await approveTx.wait();
-    console.log("Seller approved Auction contract to hold the NFT.");
-
-    // List item. address(0) means we accept ETH bids.
-    const listTx = await auction.connect(seller).listItem(await nft.getAddress(), tokenId, ethers.ZeroAddress);
+    // 3. List Item (Mints NFT)
+    console.log("\n--- 3. Listing Item ---");
+    const itemName = "Legendary Sword";
+    const listTx = await auction.connect(seller).listItem(itemName);
     await listTx.wait();
     const itemId = 0; // First listed item is 0
-    console.log("Seller listed NFT on Auction.");
-    console.log(`NFT Owner is now: ${await nft.ownerOf(tokenId)} (The Auction Contract)`);
+    console.log(`Seller listed item "${itemName}". The Auction contract minted it as NFT ID ${itemId}.`);
+    console.log(`NFT Owner is now: ${await auction.ownerOf(itemId)} (The Auction Contract itself)`);
 
     // 4. Bidding
     console.log("\n--- 4. Bidding Begins ---");
     
     const bid1Amount = ethers.parseEther("1");
     console.log(`Bidder 1 places bid of 1 ETH...`);
-    await auction.connect(bidder1).bid(itemId, 0, { value: bid1Amount });
+    await auction.connect(bidder1).bidETH(itemId, { value: bid1Amount });
 
     const itemAfterBid1 = await auction.items(itemId);
     console.log(`Current Highest Bid: ${ethers.formatEther(itemAfterBid1.highestBid)} ETH from ${itemAfterBid1.highestBidder}`);
 
     const bid2Amount = ethers.parseEther("2");
     console.log(`Bidder 2 outbids with 2 ETH...`);
-    await auction.connect(bidder2).bid(itemId, 0, { value: bid2Amount });
+    await auction.connect(bidder2).bidETH(itemId, { value: bid2Amount });
 
     const itemAfterBid2 = await auction.items(itemId);
     console.log(`Current Highest Bid: ${ethers.formatEther(itemAfterBid2.highestBid)} ETH from ${itemAfterBid2.highestBidder}`);
@@ -73,7 +76,7 @@ async function main() {
     console.log(`Auction Finalized!`);
     console.log(`Winning Bidder: ${itemAfterBid2.highestBidder}`);
     
-    const newOwner = await nft.ownerOf(tokenId);
+    const newOwner = await auction.ownerOf(itemId);
     console.log(`New NFT Owner: ${newOwner} (Should be Bidder 2)`);
 
     console.log("\n=== Simulation Complete ===");

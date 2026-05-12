@@ -1,38 +1,36 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
-contract Auction is IERC721Receiver {
+contract Auction is ERC721 {
     uint256 constant DURATION = 5 minutes;
 
     struct Item {
-        address nftContract;
-        uint256 tokenId;
-        address acceptedToken; // address(0) for ETH
+        string name;
         address seller;
         address highestBidder;
         uint256 highestBid;
+        bool isERC20Bid;
         uint256 endTime;
         bool ended;
     }
 
+    IERC20 public immutable token;
     Item[] public items;
 
     event ItemListed(
         uint256 indexed itemId,
-        address indexed nftContract,
-        uint256 indexed tokenId,
-        address acceptedToken,
-        address seller
+        string name,
+        address indexed seller
     );
 
     event NewBid(
         uint256 indexed itemId,
         address indexed bidder,
-        uint256 amount
+        uint256 amount,
+        bool isERC20
     );
 
     event AuctionEnded(
@@ -41,95 +39,87 @@ contract Auction is IERC721Receiver {
         uint256 amount
     );
 
-    constructor() {}
+    constructor(address _token) ERC721("Auction Item", "AUC") {
+        token = IERC20(_token);
+    }
 
-    // -------------------------------------------------
-    // LIST ITEM
-    // -------------------------------------------------
+    function listItem(string calldata _name) external {
+        uint256 itemId = items.length;
 
-    function listItem(
-        address _nftContract,
-        uint256 _tokenId,
-        address _acceptedToken
-    ) external {
-        // Transfer the NFT from the seller to the auction contract
-        // The seller must have approved this contract first
-        IERC721(_nftContract).safeTransferFrom(msg.sender, address(this), _tokenId);
+        // Turn the listed item into an NFT owned by the contract during the auction
+        _mint(address(this), itemId);
 
         items.push(
             Item({
-                nftContract: _nftContract,
-                tokenId: _tokenId,
-                acceptedToken: _acceptedToken,
+                name: _name,
                 seller: msg.sender,
                 highestBidder: address(0),
                 highestBid: 0,
+                isERC20Bid: false,
                 endTime: block.timestamp + DURATION,
                 ended: false
             })
         );
 
         emit ItemListed(
-            items.length - 1,
-            _nftContract,
-            _tokenId,
-            _acceptedToken,
+            itemId,
+            _name,
             msg.sender
         );
     }
 
-    // -------------------------------------------------
-    // BID
-    // -------------------------------------------------
-
-    function bid(uint256 _itemId, uint256 _amount) external payable {
+    function bidETH(uint256 _itemId) external payable {
         Item storage item = items[_itemId];
 
         require(!item.ended, "Auction ended");
         require(block.timestamp < item.endTime, "Time over");
+        require(msg.value > item.highestBid, "Low bid");
 
-        bool isETH = item.acceptedToken == address(0);
-        
-        uint256 actualBidAmount = isETH ? msg.value : _amount;
-
-        require(actualBidAmount > item.highestBid, "Low bid");
-
-        if (isETH) {
-            require(msg.value == actualBidAmount, "Incorrect ETH sent");
-        } else {
-            require(msg.value == 0, "Do not send ETH for ERC20 auction");
-            // Transfer tokens from bidder to the contract
-            bool success = IERC20(item.acceptedToken).transferFrom(
-                msg.sender,
-                address(this),
-                actualBidAmount
-            );
-            require(success, "Token transfer failed");
-        }
-
-        // Refund previous bidder
         if (item.highestBidder != address(0)) {
-            if (isETH) {
+            if (item.isERC20Bid) {
+                bool refundSuccess = token.transfer(item.highestBidder, item.highestBid);
+                require(refundSuccess, "ERC20 Refund failed");
+            } else {
                 (bool refundSuccess, ) = payable(item.highestBidder).call{value: item.highestBid}("");
                 require(refundSuccess, "ETH Refund failed");
-            } else {
-                bool refundSuccess = IERC20(item.acceptedToken).transfer(
-                    item.highestBidder,
-                    item.highestBid
-                );
-                require(refundSuccess, "ERC20 Refund failed");
             }
         }
 
         item.highestBidder = msg.sender;
-        item.highestBid = actualBidAmount;
+        item.highestBid = msg.value;
+        item.isERC20Bid = false;
 
-        emit NewBid(_itemId, msg.sender, actualBidAmount);
+        emit NewBid(_itemId, msg.sender, msg.value, false);
     }
 
-    // -------------------------------------------------
-    // FINALIZE AUCTION
-    // -------------------------------------------------
+    function bidERC20(uint256 _itemId, uint256 _amount) external {
+        Item storage item = items[_itemId];
+
+        require(!item.ended, "Auction ended");
+        require(block.timestamp < item.endTime, "Time over");
+        require(_amount > item.highestBid, "Low bid");
+
+        // take token from bidder
+        bool success = token.transferFrom(msg.sender, address(this), _amount);
+        require(success, "Transfer failed");
+
+        // refund previous bidder
+        if (item.highestBidder != address(0)) {
+            if (item.isERC20Bid) {
+                bool refundSuccess = token.transfer(item.highestBidder, item.highestBid);
+                require(refundSuccess, "ERC20 Refund failed");
+            } else {
+                (bool refundSuccess, ) = payable(item.highestBidder).call{value: item.highestBid}("");
+                require(refundSuccess, "ETH Refund failed");
+            }
+        }
+
+        item.highestBidder = msg.sender;
+        item.highestBid = _amount;
+        item.isERC20Bid = true;
+
+        emit NewBid(_itemId, msg.sender, _amount, true);
+    }
 
     function finalizeAuction(uint256 _itemId) external {
         Item storage item = items[_itemId];
@@ -139,43 +129,26 @@ contract Auction is IERC721Receiver {
 
         item.ended = true;
 
-        if (item.highestBidder != address(0)) {
-            // There was a winner
-            // Send payment to seller
-            if (item.acceptedToken == address(0)) {
-                (bool success, ) = payable(item.seller).call{value: item.highestBid}("");
-                require(success, "ETH Payment failed");
+        if (item.highestBid > 0 && item.highestBidder != address(0)) {
+            // Transfer payment to seller
+            if (item.isERC20Bid) {
+                bool success = token.transfer(item.seller, item.highestBid);
+                require(success, "Payment failed");
             } else {
-                bool success = IERC20(item.acceptedToken).transfer(
-                    item.seller,
-                    item.highestBid
-                );
-                require(success, "ERC20 Payment failed");
+                (bool success, ) = payable(item.seller).call{value: item.highestBid}("");
+                require(success, "Payment failed");
             }
 
-            // Send NFT to winner
-            IERC721(item.nftContract).safeTransferFrom(
-                address(this),
-                item.highestBidder,
-                item.tokenId
-            );
+            // Transfer NFT to winner
+            _transfer(address(this), item.highestBidder, _itemId);
 
-            emit AuctionEnded(_itemId, item.highestBidder, item.highestBid);
         } else {
             // No bids, return NFT to seller
-            IERC721(item.nftContract).safeTransferFrom(
-                address(this),
-                item.seller,
-                item.tokenId
-            );
-            
-            emit AuctionEnded(_itemId, address(0), 0);
+            _transfer(address(this), item.seller, _itemId);
         }
-    }
 
-    // -------------------------------------------------
-    // VIEW FUNCTIONS
-    // -------------------------------------------------
+        emit AuctionEnded(_itemId, item.highestBidder, item.highestBid);
+    }
 
     function getAllItems() external view returns (Item[] memory) {
         return items;
@@ -187,15 +160,5 @@ contract Auction is IERC721Receiver {
 
     function totalItems() external view returns (uint256) {
         return items.length;
-    }
-
-    // Needed to receive NFTs safely
-    function onERC721Received(
-        address operator,
-        address from,
-        uint256 tokenId,
-        bytes calldata data
-    ) external override returns (bytes4) {
-        return this.onERC721Received.selector;
     }
 }
