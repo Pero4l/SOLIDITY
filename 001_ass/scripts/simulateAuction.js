@@ -10,25 +10,10 @@ async function main() {
     Bidder1: ${bidder1.address}
     Bidder2: ${bidder2.address}`);
 
-    // 1. Deploy ERC20 Token for Bidding
-    console.log("\n--- 1. Deploying Mock ERC20 ---");
-    // Since we don't have a MockERC20 in contracts, we can just deploy an ERC20 from an inline factory if we wanted.
-    // Or we can just simulate ETH bids, which is easier and doesn't require a mock.
-    // Let's create a quick MockERC20 contract if needed, but for simplicity, let's use the Auction contract and bidETH.
-    // We can deploy a simple mock token using ethers if we don't have one in the contracts folder.
-    // Wait, the user might not even need the mock ERC20 if we just do ETH bids.
-    // We will deploy the Auction with a random address for the token for now if we only test ETH.
-    
-    const MockTokenFactory = await ethers.getContractFactory("MockERC20").catch(() => null);
-    let tokenAddress = ethers.ZeroAddress;
-    if (MockTokenFactory) {
-        const token = await MockTokenFactory.deploy();
-        await token.waitForDeployment();
-        tokenAddress = await token.getAddress();
-        console.log(`Mock ERC20 Deployed at: ${tokenAddress}`);
-    } else {
-        console.log(`No MockERC20 found, using ZeroAddress for token.`);
-    }
+    // 1. Setup Token Address (Using ZeroAddress for simplicity since we only test ETH bids here)
+    console.log("\n--- 1. Setting up ERC20 Token Address ---");
+    const tokenAddress = ethers.ZeroAddress;
+    console.log(`Using ZeroAddress for ERC20 Token.`);
 
     // 2. Deploy Auction Contract
     console.log("\n--- 2. Deploying Auction Contract ---");

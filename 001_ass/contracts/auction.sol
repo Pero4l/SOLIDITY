@@ -46,7 +46,6 @@ contract Auction is ERC721 {
     function listItem(string calldata _name) external {
         uint256 itemId = items.length;
 
-        // Turn the listed item into an NFT owned by the contract during the auction
         _mint(address(this), itemId);
 
         items.push(
@@ -99,11 +98,11 @@ contract Auction is ERC721 {
         require(block.timestamp < item.endTime, "Time over");
         require(_amount > item.highestBid, "Low bid");
 
-        // take token from bidder
+        
         bool success = token.transferFrom(msg.sender, address(this), _amount);
         require(success, "Transfer failed");
 
-        // refund previous bidder
+       
         if (item.highestBidder != address(0)) {
             if (item.isERC20Bid) {
                 bool refundSuccess = token.transfer(item.highestBidder, item.highestBid);
@@ -130,7 +129,7 @@ contract Auction is ERC721 {
         item.ended = true;
 
         if (item.highestBid > 0 && item.highestBidder != address(0)) {
-            // Transfer payment to seller
+            
             if (item.isERC20Bid) {
                 bool success = token.transfer(item.seller, item.highestBid);
                 require(success, "Payment failed");
@@ -139,11 +138,11 @@ contract Auction is ERC721 {
                 require(success, "Payment failed");
             }
 
-            // Transfer NFT to winner
+            
             _transfer(address(this), item.highestBidder, _itemId);
 
         } else {
-            // No bids, return NFT to seller
+            
             _transfer(address(this), item.seller, _itemId);
         }
 
