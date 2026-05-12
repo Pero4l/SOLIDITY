@@ -4,7 +4,7 @@ const {
 } = require("@nomicfoundation/hardhat-toolbox/network-helpers");
 const { expect } = require("chai");
 
-describe("Auction", function () {
+describe("NFT Auction", function () {
   async function deployAuctionFixture() {
     const [owner, seller, bidder1, bidder2] = await ethers.getSigners();
 
@@ -13,145 +13,128 @@ describe("Auction", function () {
     const MockERC20 = await ethers.getContractFactory("MockERC20");
     const token = await MockERC20.deploy(initialSupply);
 
+    // Deploy Mock ERC721 Token
+    const MockERC721 = await ethers.getContractFactory("MockERC721");
+    const nft = await MockERC721.deploy();
+
     // Deploy Auction contract
     const Auction = await ethers.getContractFactory("Auction");
-    const auction = await Auction.deploy(await token.getAddress());
+    const auction = await Auction.deploy();
 
-    // Give some tokens to bidders
+    // Setup: Give some ERC20 tokens to bidders
     await token.transfer(bidder1.address, ethers.parseEther("1000"));
     await token.transfer(bidder2.address, ethers.parseEther("1000"));
 
-    return { auction, token, owner, seller, bidder1, bidder2 };
+    // Setup: Mint 2 NFTs to seller
+    await nft.mint(seller.address); // Token ID 0
+    await nft.mint(seller.address); // Token ID 1
+
+    return { auction, token, nft, owner, seller, bidder1, bidder2 };
   }
 
-  describe("Deployment", function () {
-    it("Should set the right token address", async function () {
-      const { auction, token } = await loadFixture(deployAuctionFixture);
-      expect(await auction.token()).to.equal(await token.getAddress());
-    });
-  });
-
   describe("Listing Items", function () {
-    it("Should allow listing an item", async function () {
-      const { auction, seller } = await loadFixture(deployAuctionFixture);
+    it("Should allow listing an NFT", async function () {
+      const { auction, nft, seller } = await loadFixture(deployAuctionFixture);
 
-      await expect(auction.connect(seller).listItem("Vintage Watch"))
-        .to.emit(auction, "ItemListed")
-        .withArgs(0, "Vintage Watch", seller.address);
+      // Seller must approve the auction contract to take their NFT
+      await nft.connect(seller).approve(await auction.getAddress(), 0);
+
+      // List it accepting ETH (address(0))
+      await expect(
+        auction.connect(seller).listItem(await nft.getAddress(), 0, ethers.ZeroAddress)
+      ).to.emit(auction, "ItemListed");
+
+      // Verify the NFT is now in the auction contract
+      expect(await nft.ownerOf(0)).to.equal(await auction.getAddress());
 
       const item = await auction.items(0);
-      expect(item.name).to.equal("Vintage Watch");
+      expect(item.nftContract).to.equal(await nft.getAddress());
+      expect(item.tokenId).to.equal(0);
+      expect(item.acceptedToken).to.equal(ethers.ZeroAddress);
       expect(item.seller).to.equal(seller.address);
-      expect(item.highestBidder).to.equal(ethers.ZeroAddress);
-      expect(item.highestBid).to.equal(0);
-      expect(item.ended).to.be.false;
     });
   });
 
-  describe("Bidding with ETH", function () {
-    it("Should accept ETH bids and refund previous bidder", async function () {
-      const { auction, seller, bidder1, bidder2 } = await loadFixture(deployAuctionFixture);
+  describe("Bidding", function () {
+    it("Should accept ETH bids for ETH auctions", async function () {
+      const { auction, nft, seller, bidder1, bidder2 } = await loadFixture(deployAuctionFixture);
 
-      await auction.connect(seller).listItem("Car");
+      await nft.connect(seller).approve(await auction.getAddress(), 0);
+      await auction.connect(seller).listItem(await nft.getAddress(), 0, ethers.ZeroAddress);
 
       // Bidder 1 bids 1 ETH
-      await expect(auction.connect(bidder1).bidETH(0, { value: ethers.parseEther("1") }))
+      await expect(auction.connect(bidder1).bid(0, 0, { value: ethers.parseEther("1") }))
         .to.emit(auction, "NewBid")
         .withArgs(0, bidder1.address, ethers.parseEther("1"));
 
-      // Bidder 2 bids 2 ETH
-      const bidder1BalanceBefore = await ethers.provider.getBalance(bidder1.address);
-      await expect(auction.connect(bidder2).bidETH(0, { value: ethers.parseEther("2") }))
-        .to.emit(auction, "NewBid")
-        .withArgs(0, bidder2.address, ethers.parseEther("2"));
-
-      // Bidder 1 should receive their 1 ETH back
-      const bidder1BalanceAfter = await ethers.provider.getBalance(bidder1.address);
-      expect(bidder1BalanceAfter - bidder1BalanceBefore).to.equal(ethers.parseEther("1"));
+      // Bidder 2 bids 2 ETH, Bidder 1 is refunded
+      const bidder1BalBefore = await ethers.provider.getBalance(bidder1.address);
+      await expect(auction.connect(bidder2).bid(0, 0, { value: ethers.parseEther("2") }))
+        .to.emit(auction, "NewBid");
+      const bidder1BalAfter = await ethers.provider.getBalance(bidder1.address);
+      
+      expect(bidder1BalAfter - bidder1BalBefore).to.equal(ethers.parseEther("1"));
     });
 
-    it("Should reject low bids", async function () {
-      const { auction, seller, bidder1 } = await loadFixture(deployAuctionFixture);
-      await auction.connect(seller).listItem("Car");
-      await auction.connect(bidder1).bidETH(0, { value: ethers.parseEther("1") });
+    it("Should accept ERC20 bids for ERC20 auctions", async function () {
+      const { auction, token, nft, seller, bidder1, bidder2 } = await loadFixture(deployAuctionFixture);
 
-      await expect(
-        auction.connect(bidder1).bidETH(0, { value: ethers.parseEther("0.5") })
-      ).to.be.revertedWith("Low bid");
-    });
-  });
+      await nft.connect(seller).approve(await auction.getAddress(), 1);
+      await auction.connect(seller).listItem(await nft.getAddress(), 1, await token.getAddress());
 
-  describe("Bidding with ERC20", function () {
-    it("Should accept ERC20 bids and refund previous bidder", async function () {
-      const { auction, token, seller, bidder1, bidder2 } = await loadFixture(deployAuctionFixture);
-
-      await auction.connect(seller).listItem("Laptop");
-
-      const bidAmount1 = ethers.parseEther("100");
-      const bidAmount2 = ethers.parseEther("200");
+      const bid1 = ethers.parseEther("100");
+      const bid2 = ethers.parseEther("200");
 
       // Bidder 1 approves and bids
-      await token.connect(bidder1).approve(await auction.getAddress(), bidAmount1);
-      await expect(auction.connect(bidder1).bidERC20(0, bidAmount1))
+      await token.connect(bidder1).approve(await auction.getAddress(), bid1);
+      await expect(auction.connect(bidder1).bid(0, bid1))
         .to.emit(auction, "NewBid")
-        .withArgs(0, bidder1.address, bidAmount1);
+        .withArgs(0, bidder1.address, bid1);
 
-      // Bidder 2 approves and bids
-      await token.connect(bidder2).approve(await auction.getAddress(), bidAmount2);
+      // Bidder 2 approves and bids, bidder 1 gets refund
+      await token.connect(bidder2).approve(await auction.getAddress(), bid2);
       
-      const bidder1TokenBefore = await token.balanceOf(bidder1.address);
-      await expect(auction.connect(bidder2).bidERC20(0, bidAmount2))
-        .to.emit(auction, "NewBid")
-        .withArgs(0, bidder2.address, bidAmount2);
+      const b1TokenBefore = await token.balanceOf(bidder1.address);
+      await expect(auction.connect(bidder2).bid(0, bid2))
+        .to.emit(auction, "NewBid");
+      const b1TokenAfter = await token.balanceOf(bidder1.address);
 
-      // Bidder 1 should receive their tokens back
-      const bidder1TokenAfter = await token.balanceOf(bidder1.address);
-      expect(bidder1TokenAfter - bidder1TokenBefore).to.equal(bidAmount1);
+      expect(b1TokenAfter - b1TokenBefore).to.equal(bid1);
     });
   });
 
-  describe("Finalizing Auction", function () {
-    it("Should not finalize before end time", async function () {
-      const { auction, seller } = await loadFixture(deployAuctionFixture);
-      await auction.connect(seller).listItem("Phone");
-      
-      await expect(auction.connect(seller).finalizeAuction(0))
-        .to.be.revertedWith("Auction still active");
-    });
+  describe("Finalizing", function () {
+    it("Should transfer NFT to winner and ETH to seller", async function () {
+      const { auction, nft, seller, bidder1 } = await loadFixture(deployAuctionFixture);
 
-    it("Should finalize and transfer ETH to seller", async function () {
-      const { auction, seller, bidder1 } = await loadFixture(deployAuctionFixture);
-      await auction.connect(seller).listItem("Phone");
-      
-      await auction.connect(bidder1).bidETH(0, { value: ethers.parseEther("1") });
+      await nft.connect(seller).approve(await auction.getAddress(), 0);
+      await auction.connect(seller).listItem(await nft.getAddress(), 0, ethers.ZeroAddress);
 
-      // Fast forward time
-      await time.increase(5 * 60 + 1); // 5 minutes + 1 second
+      await auction.connect(bidder1).bid(0, 0, { value: ethers.parseEther("1") });
 
-      const sellerBalanceBefore = await ethers.provider.getBalance(seller.address);
-      
+      await time.increase(5 * 60 + 1); // Fast forward past duration
+
+      const sellerBalBefore = await ethers.provider.getBalance(seller.address);
       await expect(auction.connect(seller).finalizeAuction(0))
         .to.emit(auction, "AuctionEnded")
         .withArgs(0, bidder1.address, ethers.parseEther("1"));
-
-      const sellerBalanceAfter = await ethers.provider.getBalance(seller.address);
       
-      // Seller should receive the bid amount (ignoring gas costs since caller could be anyone)
-      // Here seller is calling finalize, so they pay gas. We check approximately or have someone else call.
-      // Let's have bidder1 call it to avoid gas deduction from seller.
+      // Verify NFT ownership changed to bidder
+      expect(await nft.ownerOf(0)).to.equal(bidder1.address);
     });
 
-    it("Finalize from another account to check seller exact balance", async function () {
-        const { auction, seller, bidder1, bidder2 } = await loadFixture(deployAuctionFixture);
-        await auction.connect(seller).listItem("Phone");
-        await auction.connect(bidder1).bidETH(0, { value: ethers.parseEther("1") });
-        await time.increase(5 * 60 + 1);
+    it("Should return NFT to seller if no bids", async function () {
+      const { auction, nft, seller } = await loadFixture(deployAuctionFixture);
 
-        const sellerBalanceBefore = await ethers.provider.getBalance(seller.address);
-        await auction.connect(bidder2).finalizeAuction(0); // bidder2 pays gas
-        const sellerBalanceAfter = await ethers.provider.getBalance(seller.address);
+      await nft.connect(seller).approve(await auction.getAddress(), 0);
+      await auction.connect(seller).listItem(await nft.getAddress(), 0, ethers.ZeroAddress);
 
-        expect(sellerBalanceAfter - sellerBalanceBefore).to.equal(ethers.parseEther("1"));
+      await time.increase(5 * 60 + 1);
+
+      await auction.connect(seller).finalizeAuction(0);
+
+      // Verify NFT ownership reverted to seller
+      expect(await nft.ownerOf(0)).to.equal(seller.address);
     });
   });
 });

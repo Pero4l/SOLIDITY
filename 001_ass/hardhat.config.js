@@ -5,7 +5,12 @@ const { PRIVATE_KEY, RPC_URL, ETHERSCAN_API_KEY } = process.env;
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
-  solidity: "0.8.28",
+  solidity: {
+    version: "0.8.28",
+    settings: {
+      evmVersion: "cancun"
+    }
+  },
   networks: {
     sepolia: {
       url: RPC_URL || "",
