@@ -18,8 +18,13 @@ contract NovaReceipt {
         schoolContract = msg.sender; 
     }
 
+    function setSchoolContract(address _schoolContract) public {
+        require(msg.sender == schoolContract, "Not authorized");
+        schoolContract = _schoolContract;
+    }
   
     function mintReceipt(address to) public {
+        require(msg.sender == schoolContract, "Only school can mint");
         uint256 tokenId = nextTokenId;
         
         _balances[to] += 1;
